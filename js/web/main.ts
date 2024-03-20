@@ -39,13 +39,15 @@ function addSort(th: HTMLTableCellElement) {
 }
 
 const queryParams = new URLSearchParams(window.location.search);
-for (const [name, b] of Object.entries(benchmarks)) {
+for (const [name,] of Object.entries(benchmarks)) {
   const link = document.createElement('a');
   link.innerText = name;
   link.href = `./?benchmark=${name}`;
   link.classList.add('benchmark-link');
   document.body.appendChild(link);
+}
 
+for (const [name, b] of Object.entries(benchmarks)) {
   if (name !== queryParams.get('benchmark')) {
     continue;
   }
