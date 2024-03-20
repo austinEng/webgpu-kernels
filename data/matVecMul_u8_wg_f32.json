@@ -1,0 +1,18 @@
+{
+  "shader": "62886aabb3794db7e55ec416ee2b4bd1609c946e.wgsl",
+  "requiredFeatures": [
+    "timestamp-query"
+  ],
+  "requiredLimits": {
+    "maxStorageBufferBindingSize": 67108864
+  },
+  "params": {
+    "storage_dtype": "u8",
+    "swizzled": false,
+    "workgroups": true,
+    "subgroups": false,
+    "compute_dtype": "f32",
+    "rows": 32768,
+    "cols": 2048
+  }
+}

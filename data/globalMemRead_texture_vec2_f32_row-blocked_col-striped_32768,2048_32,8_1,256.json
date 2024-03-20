@@ -1,0 +1,28 @@
+{
+  "shader": "2a021340ebeb6c6f40a5ff969f9b6d9ab34d8c45.wgsl",
+  "requiredFeatures": [
+    "timestamp-query"
+  ],
+  "requiredLimits": {
+    "maxTextureDimension2D": 16384
+  },
+  "params": {
+    "storage_type": "texture",
+    "data_type": "f32",
+    "pack_type": "vec2",
+    "row_access": "blocked",
+    "col_access": "striped",
+    "size": [
+      32768,
+      2048
+    ],
+    "workgroup_size": [
+      32,
+      8
+    ],
+    "dispatch_size": [
+      1,
+      256
+    ]
+  }
+}

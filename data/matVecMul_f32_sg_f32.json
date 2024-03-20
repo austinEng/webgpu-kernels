@@ -1,0 +1,19 @@
+{
+  "shader": "441aee10498dd8bce6b5814234b5b48ac00e8b34.wgsl",
+  "requiredFeatures": [
+    "timestamp-query",
+    "chromium-experimental-subgroups"
+  ],
+  "requiredLimits": {
+    "maxStorageBufferBindingSize": 268435456
+  },
+  "params": {
+    "storage_dtype": "f32",
+    "swizzled": false,
+    "workgroups": false,
+    "subgroups": true,
+    "compute_dtype": "f32",
+    "rows": 32768,
+    "cols": 2048
+  }
+}

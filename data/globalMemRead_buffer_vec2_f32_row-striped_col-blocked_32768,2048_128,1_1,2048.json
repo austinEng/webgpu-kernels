@@ -1,0 +1,29 @@
+{
+  "shader": "ade4742a0a9e9662b3b4916fbc382c4b6c301c3b.wgsl",
+  "requiredFeatures": [
+    "timestamp-query"
+  ],
+  "requiredLimits": {
+    "maxStorageBufferBindingSize": 268435456,
+    "maxBufferSize": 268435456
+  },
+  "params": {
+    "storage_type": "buffer",
+    "data_type": "f32",
+    "pack_type": "vec2",
+    "row_access": "striped",
+    "col_access": "blocked",
+    "size": [
+      32768,
+      2048
+    ],
+    "workgroup_size": [
+      128,
+      1
+    ],
+    "dispatch_size": [
+      1,
+      2048
+    ]
+  }
+}
