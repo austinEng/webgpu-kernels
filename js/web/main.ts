@@ -39,6 +39,7 @@ function addSort(th: HTMLTableCellElement) {
 }
 
 const queryParams = new URLSearchParams(window.location.search);
+const powerPreference = queryParams.get('powerPreference');
 for (const [name,] of Object.entries(benchmarks)) {
   const link = document.createElement('a');
   link.innerText = name;
@@ -79,7 +80,11 @@ for (const [name, b] of Object.entries(benchmarks)) {
     try {
       const t = b.generateTest(params);
 
-      const adapter = await navigator.gpu.requestAdapter();
+      const opts: GPURequestAdapterOptions = {};
+      if (powerPreference) {
+        opts.powerPreference = powerPreference as GPUPowerPreference;
+      }
+      const adapter = await navigator.gpu.requestAdapter(opts);
       if (!adapter) {
         continue;
       }
