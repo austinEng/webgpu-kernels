@@ -409,9 +409,6 @@ function caseGenerator(): Record<string, Params> {
                 [32, 2],
                 [16, 4],
                 [8, 8],
-                // [4, 16],
-                // [2, 32],
-                // [1, 64],
               ] as const) {
                 const dispatch_size = [1, size[1] / workgroup_size[1]] as const;
 
@@ -430,39 +427,6 @@ function caseGenerator(): Record<string, Params> {
                   workgroup_size,
                   dispatch_size,
                 }
-                /*const width_in_loads = widthInLoads({ pack_type, size });
-                const n_tiles = [
-                  width_in_loads / workgroup_size[1],
-                  size[1] / workgroup_size[0],
-                ];
-
-                for (let loop_x = 1; loop_x <= n_tiles[0]; loop_x *= 8) {
-                  for (let loop_y = 1; loop_y <= n_tiles[1]; loop_y *= 8) {
-                    const dispatch_size = [
-                      n_tiles[0] / loop_x,
-                      n_tiles[1] / loop_y,
-                    ] as const;
-
-                    if (dispatch_size[0] != Math.round(dispatch_size[0])) {
-                      continue;
-                    }
-
-                    if (dispatch_size[1] != Math.round(dispatch_size[1])) {
-                      continue;
-                    }
-
-                    out[`${storage_type}_${pack_type}_${data_type}_row-${row_access}_col-${col_access}_${size}_${workgroup_size}_${dispatch_size}`] = {
-                      storage_type,
-                      data_type,
-                      pack_type,
-                      row_access,
-                      col_access,
-                      size,
-                      workgroup_size,
-                      dispatch_size,
-                    }
-                  }
-                }*/
               }
             }
           }
