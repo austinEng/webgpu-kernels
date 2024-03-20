@@ -1,5 +1,5 @@
 {
-  "shader": "f75b76f81348b9d3a03bf9405cf8945f9852a3d1.wgsl",
+  "shader": "matVecMul_39.wgsl",
   "requiredFeatures": [
     "timestamp-query",
     "chromium-experimental-subgroups"

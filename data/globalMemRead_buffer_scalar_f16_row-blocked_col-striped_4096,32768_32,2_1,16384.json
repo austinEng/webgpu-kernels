@@ -1,5 +1,5 @@
 {
-  "shader": "8e162f1f3ae1c2706699b6a0ff2440fde8c197bc.wgsl",
+  "shader": "globalMemRead_5.wgsl",
   "requiredFeatures": [
     "timestamp-query",
     "shader-f16"

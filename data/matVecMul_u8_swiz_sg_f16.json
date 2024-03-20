@@ -1,5 +1,5 @@
 {
-  "shader": "cf67f600087b5b17afce803f1f705f1e38e6a2e7.wgsl",
+  "shader": "matVecMul_32.wgsl",
   "requiredFeatures": [
     "timestamp-query",
     "shader-f16",
