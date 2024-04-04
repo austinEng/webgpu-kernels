@@ -15,10 +15,6 @@ for (const [name, b] of Object.entries(benchmarks)) {
     let shortName = shaders.get(wgsl);
     if (shortName === undefined) {
       shortName = name + '_' + (shortNameCount ++);
-      // const hashArray = Array.from(new Uint8Array(await subtle.digest('SHA-1', Buffer.from(wgsl))));
-      // shortName = hashArray
-      //   .map((b) => b.toString(16).padStart(2, "0"))
-      //   .join("");
       fs.writeFile(new URL('../data/' + shortName + '.wgsl', import.meta.url), wgsl);
       shaders.set(wgsl, shortName);
     }

@@ -18,6 +18,8 @@ export type Params = {
   swizzled: boolean,
   rows: number,
   cols: number,
+
+  toString(): string,
 }
 
 function makeParam<P extends {
@@ -374,8 +376,8 @@ struct Vector {
   }
 }
 
-function caseGenerator(): Record<string, Params> {
-  let out: Record<string, Params> = {};
+function caseGenerator(): Params[] {
+  let out: Params[] = [];
   for (const storage_dtype of ['f32', 'f16', 'u8'] as const) {
     for (const swizzled of [false, true] as const) {
       for (const workgroups of [false, true] as const) {
@@ -386,7 +388,7 @@ function caseGenerator(): Record<string, Params> {
               continue;
             }
 
-            out[`${storage_dtype}${swizzled ? '_swiz' : ''}${workgroups ? '_wg' : ''}${subgroups ? '_sg' : ''}_${compute_dtype}`] = {
+            out.push({
               storage_dtype,
               swizzled,
               workgroups,
@@ -394,7 +396,11 @@ function caseGenerator(): Record<string, Params> {
               compute_dtype,
               rows: 32768,
               cols: 2048,
-            }
+
+              toString() {
+                return `${this.storage_dtype}${this.swizzled ? '_swiz' : ''}${this.workgroups ? '_wg' : ''}${this.subgroups ? '_sg' : ''}_${this.compute_dtype}`
+              }
+            })
           }
         }
       }

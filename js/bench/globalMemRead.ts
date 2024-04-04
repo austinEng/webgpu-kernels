@@ -3,46 +3,18 @@ import { Benchmark } from './test';
 export type Params = {
   storage_type: 'buffer' | 'texture',
   data_type: 'f32' | 'f16',
-  pack_type: 'scalar' | 'vec2' | 'vec4' | 'mat2x4' | 'mat4x4',
+  size: readonly [number, number],
+  region: readonly [number, number],
+  dispatch_size: readonly [number, number],
+  workgroup_size: readonly [number, number],
+  read_width: 1 | 2 | 4 | 8 | 16 | number,
   row_access: 'blocked' | 'striped',
   col_access: 'blocked' | 'striped',
-  workgroup_size: readonly [number, number],
-  size: readonly [number, number],
-  dispatch_size: readonly [number, number],
+
+  toString(): string,
 }
 
-function elementsPerLoad(params: Pick<Params, 'pack_type'>) {
-  let num_els: number;
-  switch (params.pack_type) {
-    case 'scalar':
-      num_els = 1;
-      break;
-    case 'vec2':
-      num_els = 2;
-      break;
-    case 'vec4':
-      num_els = 4;
-      break;
-    case 'mat2x4':
-      num_els = 8;
-      break;
-    case 'mat4x4':
-      num_els = 16;
-      break;
-  }
-  return num_els;
-}
-
-function widthInLoads(params: Pick<Params, 'size' | 'pack_type'>) {
-  const elements_per_load = elementsPerLoad(params);
-  const width_in_loads = params.size[0] / elements_per_load;
-  if (width_in_loads != Math.round(width_in_loads)) {
-    throw new Error(`${params.size[0]} is not divisible by ${elements_per_load}`);
-  }
-  return width_in_loads;
-}
-
-function bytesPerLoad(params: Pick<Params, 'pack_type' | 'data_type'>) {
+function bytesPerLoad(params: Pick<Params, 'read_width' | 'data_type'>) {
   let bytes_per_el: number;
   switch (params.data_type) {
     case 'f16':
@@ -52,7 +24,24 @@ function bytesPerLoad(params: Pick<Params, 'pack_type' | 'data_type'>) {
       bytes_per_el = 4;
       break;
   }
-  return elementsPerLoad(params) * bytes_per_el;
+  return params.read_width * bytes_per_el;
+}
+
+function elemType(params: Pick<Params, 'data_type' | 'read_width'>) : string {
+  switch (params.read_width) {
+    case 1:
+      return params.data_type;
+    case 2:
+      return `vec2<${params.data_type}>`;
+    case 4:
+      return `vec4<${params.data_type}>`;
+    case 8:
+      return `mat2x4<${params.data_type}>`;
+    case 16:
+      return `mat4x4<${params.data_type}>`;
+    default:
+      return `array<vec4<${params.data_type}>, ${params.read_width / 4}u>`;
+  }
 }
 
 export function generateTest(params: Params): Benchmark {
@@ -61,28 +50,26 @@ export function generateTest(params: Params): Benchmark {
     enables += 'enable f16;\n'
   }
 
-  const elem_type = params.pack_type === 'scalar'
-    ? params.data_type
-    : `${params.pack_type}<${params.data_type}>`;
+  const elem_type = elemType(params);
 
   let noop_compare = '';
-  if (params.storage_type === 'texture') {
-    noop_compare = 'all(v == vec4f(123.456))';
-  } else {
-    switch (params.pack_type) {
-      case 'scalar':
-      case 'vec2':
-      case 'vec4':
-        noop_compare = `all(v == ${elem_type}(123.456))`;
-        break;
-      case 'mat2x4':
-        noop_compare = `all(v[0] == vec4<${params.data_type}>(123.456)) && all(v[1] == vec4<${params.data_type}>(123.456))`;
-        break;
-      case 'mat4x4':
-        noop_compare = `all(v[0] == vec4<${params.data_type}>(123.456)) && all(v[1] == vec4<${params.data_type}>(123.456)) && all(v[2] == vec4<${params.data_type}>(123.456)) && all(v[3] == vec4<${params.data_type}>(123.456))`;
-        break;
-    }
+  switch (params.read_width) {
+    case 1:
+    case 2:
+    case 4:
+      noop_compare = `all(v == ${elem_type}(123.456))`;
+      break;
+    default:
+      noop_compare = '';
+      for (let i = 0; i < params.read_width / 4; i += 1) {
+        if (i != 0) {
+          noop_compare += ' || ';
+        }
+        noop_compare += `all(v[${i}] == vec4<${params.data_type}>(123.456))`
+      }
+      break;
   }
+
   let types = '';
   let texture_dtype;
   if (params.storage_type === 'buffer') {
@@ -99,23 +86,24 @@ alias Matrix = texture_2d<${texture_dtype}>;`
   let y_loop = '';
   let x_loop = '';
 
-  if (params.col_access === 'striped') {
-    x_loop = 'for (var x = global_id.x; x < uniforms.width; x = x + wg_size_x)'
-  } else {
-    x_loop = `let x_per_thread = uniforms.width / wg_size_x;
-    let x_start = global_id.x * x_per_thread;
-    for (var x = x_start; x < x_start + x_per_thread; x++)`
-  }
 
   if (params.row_access === 'striped') {
-    y_loop = `let y_per_group = uniforms.height / dispatch_size_y;
-  for (var y = workgroup_id.y * y_per_group; y < (workgroup_id.y + 1u) * y_per_group; y = y + wg_size_y)`
+    y_loop = `let y_start = workgroup_id.y * region_size_y;
+  for (var y = y_start + local_id.y; y < y_start + region_size_y; y = y + wg_size_y)`
   } else {
-    y_loop = `let y_per_group = uniforms.height / dispatch_size_y;
-  let y_start = workgroup_id.y * y_per_group + local_id.y;
-  for (var y = y_start; y < y_start + y_per_group; y++)`
+    y_loop = `let y_per_thread = region_size_y / wg_size_y;
+    let y_start = workgroup_id.y * region_size_y + local_id.y * y_per_thread;
+    for (var y = y_start; y < y_start + y_per_thread; y++)`
   }
 
+  if (params.col_access === 'striped') {
+    x_loop = `let x_start = workgroup_id.x * region_size_x;
+    for (var x = x_start + local_id.x; x < x_start + region_size_x; x = x + wg_size_x)`
+  } else {
+    x_loop = `let x_per_thread = region_size_x / wg_size_x;
+    let x_start = workgroup_id.x * region_size_x + local_id.x + x_per_thread;
+    for (var x = x_start; x < x_start + x_per_thread; x++)`
+  }
 
   let code = `${enables}
 struct Uniforms {
@@ -127,9 +115,10 @@ ${types}
 @group(0) @binding(1) var<storage, read_write> result : f32;
 @group(0) @binding(3) var<uniform> uniforms : Uniforms;
 
+override region_size_x : u32;
+override region_size_y : u32;
 override wg_size_x : u32;
-override wg_size_y : u32;
-override dispatch_size_y : u32;`
+override wg_size_y : u32;`
 
   if (params.storage_type === 'buffer') {
     code += `
@@ -154,6 +143,28 @@ override dispatch_size_y : u32;`
 }
 `;
   } else {
+    let tex_load = '';
+    switch (params.read_width) {
+      case 1:
+        tex_load = `let v = ${params.data_type}(textureLoad(matrix, vec2<u32>(x, y), 0).x);`;
+        break;
+      case 2:
+        tex_load = `let v = vec2<${params.data_type}>(textureLoad(matrix, vec2<u32>(x, y), 0).xy);`;
+        break;
+      case 4:
+        tex_load = `let v = vec4<${params.data_type}>(textureLoad(matrix, vec2<u32>(x, y), 0));`;
+        break;
+      default:
+        tex_load = `let v = ${elem_type}(`
+        for (let i = 0; i < params.read_width / 4; i++) {
+          if (i !== 0) {
+            tex_load += ', '
+          }
+          tex_load += `vec4<${params.data_type}>(textureLoad(matrix, vec2<u32>(${params.read_width / 4}u * x + ${i}u, y), 0))`;
+        }
+        tex_load += ');'
+        break;
+    }
     code += `
 @group(0) @binding(0) var matrix : Matrix;
 
@@ -162,10 +173,11 @@ override dispatch_size_y : u32;`
   @builtin(workgroup_id) workgroup_id  : vec3u,
   @builtin(local_invocation_id) local_id  : vec3u
 ) {
+  _ = &uniforms;
   var acc : vec4<${texture_dtype}>;
   ${y_loop} {
     ${x_loop} {
-      let v = textureLoad(matrix, vec2<u32>(x, y), 0);
+      ${tex_load}
       if (${noop_compare}) {
         // This condition should never pass in practice based
         // on the test values we use. It's here to prevent
@@ -190,12 +202,12 @@ override dispatch_size_y : u32;`
   let textureSize: [number, number] | undefined;
 
   if (params.storage_type === 'buffer') {
-    storageBufferSize = bytesPerLoad(params) * widthInLoads(params) * params.size[1];
+    storageBufferSize = bytesPerLoad(params) * params.size[0] * params.size[1] / params.read_width;
     requiredLimits.maxStorageBufferBindingSize = storageBufferSize;
     requiredLimits.maxBufferSize = storageBufferSize;
   } else {
     textureSize = [
-      widthInLoads(params),
+      params.size[0] / params.read_width,
       params.size[1],
     ];
     requiredLimits.maxTextureDimension2D = Math.max(textureSize[0], textureSize[1]);
@@ -217,22 +229,22 @@ override dispatch_size_y : u32;`
         const size = textureSize!;
         switch (params.data_type) {
           case 'f16':
-            switch (params.pack_type) {
-              case 'scalar':
+            switch (params.read_width) {
+              case 1:
                 texture = device.createTexture({
                   usage: GPUTextureUsage.TEXTURE_BINDING,
                   size,
                   format: 'r16float'
                 });
                 break;
-              case 'vec2':
+              case 2:
                 texture = device.createTexture({
                   usage: GPUTextureUsage.TEXTURE_BINDING,
                   size,
                   format: 'rg16float'
                 });
                 break;
-              case 'vec4':
+              default:
                 texture = device.createTexture({
                   usage: GPUTextureUsage.TEXTURE_BINDING,
                   size,
@@ -242,22 +254,22 @@ override dispatch_size_y : u32;`
             }
             break;
           case 'f32':
-            switch (params.pack_type) {
-              case 'scalar':
+            switch (params.read_width) {
+              case 1:
                 texture = device.createTexture({
                   usage: GPUTextureUsage.TEXTURE_BINDING,
                   size,
                   format: 'r32float'
                 });
                 break;
-              case 'vec2':
+              case 2:
                 texture = device.createTexture({
                   usage: GPUTextureUsage.TEXTURE_BINDING,
                   size,
                   format: 'rg32float'
                 });
                 break;
-              case 'vec4':
+              default:
                 texture = device.createTexture({
                   usage: GPUTextureUsage.TEXTURE_BINDING,
                   size,
@@ -275,7 +287,7 @@ override dispatch_size_y : u32;`
         mappedAtCreation: true,
       });
       (new Uint32Array(uniforms.getMappedRange())).set([
-        widthInLoads(params),
+        params.size[0] / params.read_width,
         params.size[1],
       ]);
       uniforms.unmap();
@@ -301,9 +313,10 @@ override dispatch_size_y : u32;`
         compute: {
           module,
           constants: {
+            region_size_x: params.region[0] / params.read_width,
+            region_size_y: params.region[1],
             wg_size_x: params.workgroup_size[0],
             wg_size_y: params.workgroup_size[1],
-            dispatch_size_y: params.dispatch_size[1],
           }
         },
       });
@@ -375,57 +388,57 @@ override dispatch_size_y : u32;`
   }
 }
 
-function caseGenerator(): Record<string, Params> {
-  const sizeA = 32768;
-  const sizeB = 2048;
-  let out: Record<string, Params> = {};
+function caseGenerator(): Params[] {
+  const width = 32768;
+  const height = 4096;
+  let out: Params[] = [];
   for (const storage_type of ['buffer', 'texture'] as const) {
-    for (const pack_type of ['scalar', 'vec2', 'vec4', 'mat2x4', 'mat4x4'] as const) {
-      if (pack_type === 'mat2x4' || pack_type === 'mat4x4') {
-        if (storage_type === 'texture') {
-          continue;
-        }
-      }
-      for (const data_type of ['f32', 'f16'] as const) {
-        for (const row_access of ['blocked', 'striped'] as const) {
-          for (const col_access of ['blocked', 'striped'] as const) {
-            for (const size of [
-              [data_type === 'f16' ? sizeA * 2 : sizeA, sizeB],
-              [data_type === 'f16' ? sizeB * 2 : sizeB, sizeA],
-            ] as const) {
-              for (const workgroup_size of [
-                [256, 1],
-                [128, 2],
-                [64, 4],
-                [32, 8],
-                [16, 16],
+    for (const data_type of ['f32', 'f16'] as const) {
+      const size = data_type === 'f16' ? [2 * width, height] as const : [width, height] as const;
+      for (let region_height = 1; region_height <= Math.min(height, 64); region_height *= 2) {
+        for (let region_width: number = size[0]; region_width >= 256; region_width /= 2) {
+          const region = [region_width, region_height] as const;
+          for (let workgroup_y = 1; workgroup_y <= 64 && workgroup_y <= region_height; workgroup_y *= 2) {
+            // if (region_height / workgroup_y != Math.round(region_height / workgroup_y)) {
+            //   continue;
+            // }
+            for (let workgroup_x = 8; workgroup_x <= 256; workgroup_x *= 2) {
+              if (workgroup_x * workgroup_y > 256 || workgroup_x * workgroup_y < 32) {
+                continue;
+              }
+              // if (region_width / workgroup_x != Math.round(region_width / workgroup_x)) {
+              //   continue;
+              // }
+              for (let read_width = 1; read_width <= 32 && workgroup_x * read_width <= region_width; read_width *= 2) {
+                for (const row_access of ['blocked', 'striped'] as const) {
+                  if (row_access === 'blocked' && region_height === 1) {
+                    continue;
+                  }
+                  for (const col_access of ['blocked', 'striped'] as const) {
+                    if (col_access === 'blocked' && region_width === 1) {
+                      continue;
+                    }
+                    const workgroup_size = [workgroup_x, workgroup_y] as const;
+                    const dispatch_size = [
+                      Math.ceil(size[0] / region[0]),
+                      Math.ceil(size[1] / region[1]),
+                    ] as const;
+                    out.push({
+                      storage_type,
+                      data_type,
+                      size,
+                      region,
+                      dispatch_size,
+                      workgroup_size,
+                      read_width: read_width as Params['read_width'],
+                      row_access,
+                      col_access,
 
-                [128, 1],
-                [64, 2],
-                [32, 4],
-                [16, 8],
-
-                [64, 1],
-                [32, 2],
-                [16, 4],
-                [8, 8],
-              ] as const) {
-                const dispatch_size = [1, size[1] / workgroup_size[1]] as const;
-
-                if (workgroup_size[1] === 1 && row_access === 'blocked') {
-                  // No difference between this and striped.
-                  continue;
-                }
-
-                out[`${storage_type}_${pack_type}_${data_type}_row-${row_access}_col-${col_access}_${size}_${workgroup_size}_${dispatch_size}`] = {
-                  storage_type,
-                  data_type,
-                  pack_type,
-                  row_access,
-                  col_access,
-                  size,
-                  workgroup_size,
-                  dispatch_size,
+                      toString() {
+                        return `${this.storage_type}_${this.data_type}_size-${this.size}_region-${this.region}_dispatch-${this.dispatch_size}_wg-${this.workgroup_size}_read-${this.read_width}_row-${this.row_access}_col-${this.col_access}`
+                      }
+                    })
+                  }
                 }
               }
             }
@@ -437,4 +450,4 @@ function caseGenerator(): Record<string, Params> {
   return out;
 }
 
-export const cases: Record<string, Params> = caseGenerator();
+export const cases = caseGenerator();
