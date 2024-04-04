@@ -356,7 +356,7 @@ function caseGenerator$2() {
     const width = 32768;
     const height = 4096;
     let out = [];
-    for (const storage_type of ['buffer']) {
+    for (const storage_type of ['buffer', 'texture']) {
         for (const data_type of ['f32', 'f16']) {
             const size = data_type === 'f16' ? [2 * width, height] : [width, height];
             for (let region_height = 1; region_height <= Math.min(height, 64); region_height *= 2) {
