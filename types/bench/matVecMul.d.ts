@@ -7,6 +7,7 @@ export type Params = {
     swizzled: boolean;
     rows: number;
     cols: number;
+    toString(): string;
 };
 export declare function generateTest(params: Params): Benchmark;
-export declare const cases: Record<string, Params>;
+export declare const cases: Params[];

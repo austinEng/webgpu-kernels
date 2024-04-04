@@ -1,33 +1,4 @@
-function elementsPerLoad(params) {
-    let num_els;
-    switch (params.pack_type) {
-        case 'scalar':
-            num_els = 1;
-            break;
-        case 'vec2':
-            num_els = 2;
-            break;
-        case 'vec4':
-            num_els = 4;
-            break;
-        case 'mat2x4':
-            num_els = 8;
-            break;
-        case 'mat4x4':
-            num_els = 16;
-            break;
-    }
-    return num_els;
-}
-function widthInLoads(params) {
-    const elements_per_load = elementsPerLoad(params);
-    const width_in_loads = params.size[0] / elements_per_load;
-    if (width_in_loads != Math.round(width_in_loads)) {
-        throw new Error(`${params.size[0]} is not divisible by ${elements_per_load}`);
-    }
-    return width_in_loads;
-}
-function bytesPerLoad(params) {
+function bytesPerLoad$1(params) {
     let bytes_per_el;
     switch (params.data_type) {
         case 'f16':
@@ -37,34 +8,46 @@ function bytesPerLoad(params) {
             bytes_per_el = 4;
             break;
     }
-    return elementsPerLoad(params) * bytes_per_el;
+    return params.read_width * bytes_per_el;
 }
-function generateTest$1(params) {
+function elemType$1(params) {
+    switch (params.read_width) {
+        case 1:
+            return params.data_type;
+        case 2:
+            return `vec2<${params.data_type}>`;
+        case 4:
+            return `vec4<${params.data_type}>`;
+        case 8:
+            return `mat2x4<${params.data_type}>`;
+        case 16:
+            return `mat4x4<${params.data_type}>`;
+        default:
+            return `array<vec4<${params.data_type}>, ${params.read_width / 4}u>`;
+    }
+}
+function generateTest$2(params) {
     let enables = '';
     if (params.data_type === 'f16') {
         enables += 'enable f16;\n';
     }
-    const elem_type = params.pack_type === 'scalar'
-        ? params.data_type
-        : `${params.pack_type}<${params.data_type}>`;
+    const elem_type = elemType$1(params);
     let noop_compare = '';
-    if (params.storage_type === 'texture') {
-        noop_compare = 'all(v == vec4f(123.456))';
-    }
-    else {
-        switch (params.pack_type) {
-            case 'scalar':
-            case 'vec2':
-            case 'vec4':
-                noop_compare = `all(v == ${elem_type}(123.456))`;
-                break;
-            case 'mat2x4':
-                noop_compare = `all(v[0] == vec4<${params.data_type}>(123.456)) && all(v[1] == vec4<${params.data_type}>(123.456))`;
-                break;
-            case 'mat4x4':
-                noop_compare = `all(v[0] == vec4<${params.data_type}>(123.456)) && all(v[1] == vec4<${params.data_type}>(123.456)) && all(v[2] == vec4<${params.data_type}>(123.456)) && all(v[3] == vec4<${params.data_type}>(123.456))`;
-                break;
-        }
+    switch (params.read_width) {
+        case 1:
+        case 2:
+        case 4:
+            noop_compare = `all(v == ${elem_type}(123.456))`;
+            break;
+        default:
+            noop_compare = '';
+            for (let i = 0; i < params.read_width / 4; i += 1) {
+                if (i != 0) {
+                    noop_compare += ' || ';
+                }
+                noop_compare += `all(v[${i}] == vec4<${params.data_type}>(123.456))`;
+            }
+            break;
     }
     let types = '';
     let texture_dtype;
@@ -81,22 +64,23 @@ alias Matrix = texture_2d<${texture_dtype}>;`;
     }
     let y_loop = '';
     let x_loop = '';
-    if (params.col_access === 'striped') {
-        x_loop = 'for (var x = global_id.x; x < uniforms.width; x = x + wg_size_x)';
-    }
-    else {
-        x_loop = `let x_per_thread = uniforms.width / wg_size_x;
-    let x_start = global_id.x * x_per_thread;
-    for (var x = x_start; x < x_start + x_per_thread; x++)`;
-    }
     if (params.row_access === 'striped') {
-        y_loop = `let y_per_group = uniforms.height / dispatch_size_y;
-  for (var y = workgroup_id.y * y_per_group; y < (workgroup_id.y + 1u) * y_per_group; y = y + wg_size_y)`;
+        y_loop = `let y_start = workgroup_id.y * region_size_y;
+  for (var y = y_start + local_id.y; y < y_start + region_size_y; y = y + wg_size_y)`;
     }
     else {
-        y_loop = `let y_per_group = uniforms.height / dispatch_size_y;
-  let y_start = workgroup_id.y * y_per_group + local_id.y;
-  for (var y = y_start; y < y_start + y_per_group; y++)`;
+        y_loop = `let y_per_thread = region_size_y / wg_size_y;
+    let y_start = workgroup_id.y * region_size_y + local_id.y * y_per_thread;
+    for (var y = y_start; y < y_start + y_per_thread; y++)`;
+    }
+    if (params.col_access === 'striped') {
+        x_loop = `let x_start = workgroup_id.x * region_size_x;
+    for (var x = x_start + local_id.x; x < x_start + region_size_x; x = x + wg_size_x)`;
+    }
+    else {
+        x_loop = `let x_per_thread = region_size_x / wg_size_x;
+    let x_start = workgroup_id.x * region_size_x + local_id.x + x_per_thread;
+    for (var x = x_start; x < x_start + x_per_thread; x++)`;
     }
     let code = `${enables}
 struct Uniforms {
@@ -108,9 +92,10 @@ ${types}
 @group(0) @binding(1) var<storage, read_write> result : f32;
 @group(0) @binding(3) var<uniform> uniforms : Uniforms;
 
+override region_size_x : u32;
+override region_size_y : u32;
 override wg_size_x : u32;
-override wg_size_y : u32;
-override dispatch_size_y : u32;`;
+override wg_size_y : u32;`;
     if (params.storage_type === 'buffer') {
         code += `
 @group(0) @binding(0) var<storage, read> matrix : Matrix;
@@ -135,6 +120,28 @@ override dispatch_size_y : u32;`;
 `;
     }
     else {
+        let tex_load = '';
+        switch (params.read_width) {
+            case 1:
+                tex_load = `let v = ${params.data_type}(textureLoad(matrix, vec2<u32>(x, y), 0).x);`;
+                break;
+            case 2:
+                tex_load = `let v = vec2<${params.data_type}>(textureLoad(matrix, vec2<u32>(x, y), 0).xy);`;
+                break;
+            case 4:
+                tex_load = `let v = vec4<${params.data_type}>(textureLoad(matrix, vec2<u32>(x, y), 0));`;
+                break;
+            default:
+                tex_load = `let v = ${elem_type}(`;
+                for (let i = 0; i < params.read_width / 4; i++) {
+                    if (i !== 0) {
+                        tex_load += ', ';
+                    }
+                    tex_load += `vec4<${params.data_type}>(textureLoad(matrix, vec2<u32>(${params.read_width / 4}u * x + ${i}u, y), 0))`;
+                }
+                tex_load += ');';
+                break;
+        }
         code += `
 @group(0) @binding(0) var matrix : Matrix;
 
@@ -143,10 +150,11 @@ override dispatch_size_y : u32;`;
   @builtin(workgroup_id) workgroup_id  : vec3u,
   @builtin(local_invocation_id) local_id  : vec3u
 ) {
+  _ = &uniforms;
   var acc : vec4<${texture_dtype}>;
   ${y_loop} {
     ${x_loop} {
-      let v = textureLoad(matrix, vec2<u32>(x, y), 0);
+      ${tex_load}
       if (${noop_compare}) {
         // This condition should never pass in practice based
         // on the test values we use. It's here to prevent
@@ -166,13 +174,13 @@ override dispatch_size_y : u32;`;
     let storageBufferSize;
     let textureSize;
     if (params.storage_type === 'buffer') {
-        storageBufferSize = bytesPerLoad(params) * widthInLoads(params) * params.size[1];
+        storageBufferSize = bytesPerLoad$1(params) * params.size[0] * params.size[1] / params.read_width;
         requiredLimits.maxStorageBufferBindingSize = storageBufferSize;
         requiredLimits.maxBufferSize = storageBufferSize;
     }
     else {
         textureSize = [
-            widthInLoads(params),
+            params.size[0] / params.read_width,
             params.size[1],
         ];
         requiredLimits.maxTextureDimension2D = Math.max(textureSize[0], textureSize[1]);
@@ -194,22 +202,22 @@ override dispatch_size_y : u32;`;
                 const size = textureSize;
                 switch (params.data_type) {
                     case 'f16':
-                        switch (params.pack_type) {
-                            case 'scalar':
+                        switch (params.read_width) {
+                            case 1:
                                 texture = device.createTexture({
                                     usage: GPUTextureUsage.TEXTURE_BINDING,
                                     size,
                                     format: 'r16float'
                                 });
                                 break;
-                            case 'vec2':
+                            case 2:
                                 texture = device.createTexture({
                                     usage: GPUTextureUsage.TEXTURE_BINDING,
                                     size,
                                     format: 'rg16float'
                                 });
                                 break;
-                            case 'vec4':
+                            default:
                                 texture = device.createTexture({
                                     usage: GPUTextureUsage.TEXTURE_BINDING,
                                     size,
@@ -219,22 +227,22 @@ override dispatch_size_y : u32;`;
                         }
                         break;
                     case 'f32':
-                        switch (params.pack_type) {
-                            case 'scalar':
+                        switch (params.read_width) {
+                            case 1:
                                 texture = device.createTexture({
                                     usage: GPUTextureUsage.TEXTURE_BINDING,
                                     size,
                                     format: 'r32float'
                                 });
                                 break;
-                            case 'vec2':
+                            case 2:
                                 texture = device.createTexture({
                                     usage: GPUTextureUsage.TEXTURE_BINDING,
                                     size,
                                     format: 'rg32float'
                                 });
                                 break;
-                            case 'vec4':
+                            default:
                                 texture = device.createTexture({
                                     usage: GPUTextureUsage.TEXTURE_BINDING,
                                     size,
@@ -251,7 +259,7 @@ override dispatch_size_y : u32;`;
                 mappedAtCreation: true,
             });
             (new Uint32Array(uniforms.getMappedRange())).set([
-                widthInLoads(params),
+                params.size[0] / params.read_width,
                 params.size[1],
             ]);
             uniforms.unmap();
@@ -273,9 +281,10 @@ override dispatch_size_y : u32;`;
                 compute: {
                     module,
                     constants: {
+                        region_size_x: params.region[0] / params.read_width,
+                        region_size_y: params.region[1],
                         wg_size_x: params.workgroup_size[0],
                         wg_size_y: params.workgroup_size[1],
-                        dispatch_size_y: params.dispatch_size[1],
                     }
                 },
             });
@@ -343,54 +352,57 @@ override dispatch_size_y : u32;`;
         }
     };
 }
-function caseGenerator$1() {
-    const sizeA = 32768;
-    const sizeB = 2048;
-    let out = {};
-    for (const storage_type of ['buffer', 'texture']) {
-        for (const pack_type of ['scalar', 'vec2', 'vec4', 'mat2x4', 'mat4x4']) {
-            if (pack_type === 'mat2x4' || pack_type === 'mat4x4') {
-                if (storage_type === 'texture') {
-                    continue;
-                }
-            }
-            for (const data_type of ['f32', 'f16']) {
-                for (const row_access of ['blocked', 'striped']) {
-                    for (const col_access of ['blocked', 'striped']) {
-                        for (const size of [
-                            [data_type === 'f16' ? sizeA * 2 : sizeA, sizeB],
-                            [data_type === 'f16' ? sizeB * 2 : sizeB, sizeA],
-                        ]) {
-                            for (const workgroup_size of [
-                                [256, 1],
-                                [128, 2],
-                                [64, 4],
-                                [32, 8],
-                                [16, 16],
-                                [128, 1],
-                                [64, 2],
-                                [32, 4],
-                                [16, 8],
-                                [64, 1],
-                                [32, 2],
-                                [16, 4],
-                                [8, 8],
-                            ]) {
-                                const dispatch_size = [1, size[1] / workgroup_size[1]];
-                                if (workgroup_size[1] === 1 && row_access === 'blocked') {
-                                    // No difference between this and striped.
-                                    continue;
+function caseGenerator$2() {
+    const width = 32768;
+    const height = 4096;
+    let out = [];
+    for (const storage_type of ['buffer']) {
+        for (const data_type of ['f32', 'f16']) {
+            const size = data_type === 'f16' ? [2 * width, height] : [width, height];
+            for (let region_height = 1; region_height <= Math.min(height, 64); region_height *= 2) {
+                for (let region_width = size[0]; region_width >= 256; region_width /= 2) {
+                    const region = [region_width, region_height];
+                    for (let workgroup_y = 1; workgroup_y <= 64 && workgroup_y <= region_height; workgroup_y *= 2) {
+                        // if (region_height / workgroup_y != Math.round(region_height / workgroup_y)) {
+                        //   continue;
+                        // }
+                        for (let workgroup_x = 8; workgroup_x <= 256; workgroup_x *= 2) {
+                            if (workgroup_x * workgroup_y > 256 || workgroup_x * workgroup_y < 32) {
+                                continue;
+                            }
+                            // if (region_width / workgroup_x != Math.round(region_width / workgroup_x)) {
+                            //   continue;
+                            // }
+                            for (let read_width = 1; read_width <= 32 && workgroup_x * read_width <= region_width; read_width *= 2) {
+                                for (const row_access of ['blocked', 'striped']) {
+                                    if (row_access === 'blocked' && region_height === 1) {
+                                        continue;
+                                    }
+                                    for (const col_access of ['blocked', 'striped']) {
+                                        if (col_access === 'blocked' && region_width === 1) {
+                                            continue;
+                                        }
+                                        const workgroup_size = [workgroup_x, workgroup_y];
+                                        const dispatch_size = [
+                                            Math.ceil(size[0] / region[0]),
+                                            Math.ceil(size[1] / region[1]),
+                                        ];
+                                        out.push({
+                                            storage_type,
+                                            data_type,
+                                            size,
+                                            region,
+                                            dispatch_size,
+                                            workgroup_size,
+                                            read_width: read_width,
+                                            row_access,
+                                            col_access,
+                                            toString() {
+                                                return `${this.storage_type}_${this.data_type}_size-${this.size}_region-${this.region}_dispatch-${this.dispatch_size}_wg-${this.workgroup_size}_read-${this.read_width}_row-${this.row_access}_col-${this.col_access}`;
+                                            }
+                                        });
+                                    }
                                 }
-                                out[`${storage_type}_${pack_type}_${data_type}_row-${row_access}_col-${col_access}_${size}_${workgroup_size}_${dispatch_size}`] = {
-                                    storage_type,
-                                    data_type,
-                                    pack_type,
-                                    row_access,
-                                    col_access,
-                                    size,
-                                    workgroup_size,
-                                    dispatch_size,
-                                };
                             }
                         }
                     }
@@ -400,9 +412,237 @@ function caseGenerator$1() {
     }
     return out;
 }
-const cases$1 = caseGenerator$1();
+const cases$2 = caseGenerator$2();
 
 var globalMemRead = /*#__PURE__*/Object.freeze({
+  __proto__: null,
+  cases: cases$2,
+  generateTest: generateTest$2
+});
+
+function bytesPerLoad(params) {
+    let bytes_per_el;
+    switch (params.data_type) {
+        case 'f16':
+            bytes_per_el = 2;
+            break;
+        case 'f32':
+            bytes_per_el = 4;
+            break;
+    }
+    return params.read_width * bytes_per_el;
+}
+function elemType(params) {
+    switch (params.read_width) {
+        case 1:
+            return params.data_type;
+        case 2:
+            return `vec2<${params.data_type}>`;
+        case 4:
+            return `vec4<${params.data_type}>`;
+        case 8:
+            return `mat2x4<${params.data_type}>`;
+        case 16:
+            return `mat4x4<${params.data_type}>`;
+        default:
+            return `array<vec4<${params.data_type}>, ${params.read_width / 4}u>`;
+    }
+}
+function generateTest$1(params) {
+    let enables = '';
+    if (params.data_type === 'f16') {
+        enables += 'enable f16;\n';
+    }
+    const elem_type = elemType(params);
+    let noop_compare = '';
+    switch (params.read_width) {
+        case 1:
+        case 2:
+        case 4:
+            noop_compare = `all(v == ${elem_type}(123.456))`;
+            break;
+        default:
+            noop_compare = '';
+            for (let i = 0; i < params.read_width / 4; i += 1) {
+                if (i != 0) {
+                    noop_compare += ' || ';
+                }
+                noop_compare += `all(v[${i}] == vec4<${params.data_type}>(123.456))`;
+            }
+            break;
+    }
+    let types = `
+struct Matrix {
+values: array<${elem_type}>,
+}`;
+    let loop = '';
+    if (params.access === 'striped') {
+        loop = `let start = workgroup_id.x * region_size;
+    for (var x = start + local_id.x; x < start + region_size; x = x + wg_size)`;
+    }
+    else {
+        loop = `let per_thread = region_size / wg_size;
+    let start = workgroup_id.x * region_size + local_id.x + per_thread;
+    for (var x = start; x < start + per_thread; x++)`;
+    }
+    let code = `${enables}
+${types}
+
+@group(0) @binding(1) var<storage, read_write> result : f32;
+
+override region_size : u32;
+override wg_size : u32;`;
+    code += `
+@group(0) @binding(0) var<storage, read> matrix : Matrix;
+
+@compute @workgroup_size(wg_size) fn main(
+  @builtin(global_invocation_id) global_id  : vec3u,
+  @builtin(workgroup_id) workgroup_id  : vec3u,
+  @builtin(local_invocation_id) local_id  : vec3u
+) {
+  ${loop} {
+    let v = matrix.values[x];
+    if (${noop_compare}) {
+      // This condition should never pass in practice based
+      // on the test values we use. It's here to prevent
+      // the compiler from optimizing out the loop body.
+      result += 1.0;
+    }
+  }
+}
+`;
+    const requiredFeatures = ['timestamp-query'];
+    if (params.data_type === 'f16') {
+        requiredFeatures.push('shader-f16');
+    }
+    const requiredLimits = {};
+    let storageBufferSize = bytesPerLoad(params) * params.size / params.read_width;
+    requiredLimits.maxStorageBufferBindingSize = storageBufferSize;
+    requiredLimits.maxBufferSize = storageBufferSize;
+    return {
+        wgsl: code,
+        requiredLimits,
+        requiredFeatures,
+        test(device) {
+            const buffer = device.createBuffer({
+                usage: GPUBufferUsage.STORAGE,
+                size: storageBufferSize,
+            });
+            const querySet = device.createQuerySet({
+                type: 'timestamp',
+                count: 2,
+            });
+            const timestampsResolve = device.createBuffer({
+                usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+                size: 8 * 2,
+            });
+            const timestampsReadback = device.createBuffer({
+                usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+                size: 8 * 2,
+            });
+            const module = device.createShaderModule({ code });
+            const pipeline = device.createComputePipeline({
+                layout: 'auto',
+                compute: {
+                    module,
+                    constants: {
+                        region_size: params.region / params.read_width,
+                        wg_size: params.workgroup_size,
+                    }
+                },
+            });
+            module.getCompilationInfo().then(info => {
+                if (info?.messages?.length) {
+                    console.log(info.messages);
+                }
+            });
+            const bindGroup = device.createBindGroup({
+                layout: pipeline.getBindGroupLayout(0),
+                entries: [{
+                        binding: 0,
+                        resource: { buffer }
+                    }, {
+                        binding: 1,
+                        resource: {
+                            buffer: device.createBuffer({
+                                usage: GPUBufferUsage.STORAGE,
+                                size: 4,
+                            })
+                        }
+                    }]
+            });
+            return function trial(n) {
+                const encoder = device.createCommandEncoder();
+                const pass = encoder.beginComputePass({
+                    timestampWrites: {
+                        querySet,
+                        beginningOfPassWriteIndex: 0,
+                        endOfPassWriteIndex: 1,
+                    }
+                });
+                pass.setPipeline(pipeline);
+                pass.setBindGroup(0, bindGroup);
+                for (let i = 0; i < n; ++i) {
+                    pass.dispatchWorkgroups(params.dispatch_size);
+                }
+                pass.end();
+                encoder.resolveQuerySet(querySet, 0, 2, timestampsResolve, 0);
+                encoder.copyBufferToBuffer(timestampsResolve, 0, timestampsReadback, 0, 16);
+                device.queue.submit([encoder.finish()]);
+                return {
+                    getTime: async function () {
+                        await timestampsReadback.mapAsync(GPUMapMode.READ);
+                        const timestamps = new BigUint64Array(timestampsReadback.getMappedRange());
+                        const duration = Number(timestamps[1] - timestamps[0]) / n;
+                        timestampsReadback.unmap();
+                        return duration;
+                    }
+                };
+            };
+        }
+    };
+}
+function caseGenerator$1() {
+    const kBufferSize = 2 * 1024 * 1024 * 1024;
+    let out = [];
+    for (const data_type of ['f32', 'f16']) {
+        const size = data_type === 'f16' ? (kBufferSize / 2) : (kBufferSize / 4);
+        for (let region = size; region >= 256; region /= 2) {
+            for (let workgroup_size = 32; workgroup_size <= 256; workgroup_size *= 2) {
+                for (let read_width = 1; read_width <= 32 && workgroup_size * read_width <= region; read_width *= 2) {
+                    for (const access of ['blocked', 'striped']) {
+                        if (access === 'blocked' && region === 1) {
+                            continue;
+                        }
+                        const dispatch_size = size / region;
+                        if (dispatch_size * workgroup_size < 32768) {
+                            continue;
+                        }
+                        if (dispatch_size > 65535) {
+                            continue;
+                        }
+                        out.push({
+                            data_type,
+                            size,
+                            region,
+                            dispatch_size,
+                            workgroup_size,
+                            read_width: read_width,
+                            access,
+                            toString() {
+                                return `${this.data_type}_size-${this.size}_region-${this.region}_dispatch-${this.dispatch_size}_wg-${this.workgroup_size}_read-${this.read_width}_${this.access}`;
+                            }
+                        });
+                    }
+                }
+            }
+        }
+    }
+    return out;
+}
+const cases$1 = caseGenerator$1();
+
+var globalMemRead1D = /*#__PURE__*/Object.freeze({
   __proto__: null,
   cases: cases$1,
   generateTest: generateTest$1
@@ -740,7 +980,7 @@ struct Vector {
     };
 }
 function caseGenerator() {
-    let out = {};
+    let out = [];
     for (const storage_dtype of ['f32', 'f16', 'u8']) {
         for (const swizzled of [false, true]) {
             for (const workgroups of [false, true]) {
@@ -750,7 +990,7 @@ function caseGenerator() {
                             compute_dtype !== storage_dtype) {
                             continue;
                         }
-                        out[`${storage_dtype}${swizzled ? '_swiz' : ''}${workgroups ? '_wg' : ''}${subgroups ? '_sg' : ''}_${compute_dtype}`] = {
+                        out.push({
                             storage_dtype,
                             swizzled,
                             workgroups,
@@ -758,7 +998,10 @@ function caseGenerator() {
                             compute_dtype,
                             rows: 32768,
                             cols: 2048,
-                        };
+                            toString() {
+                                return `${this.storage_dtype}${this.swizzled ? '_swiz' : ''}${this.workgroups ? '_wg' : ''}${this.subgroups ? '_sg' : ''}_${this.compute_dtype}`;
+                            }
+                        });
                     }
                 }
             }
@@ -775,6 +1018,7 @@ var matVecMul = /*#__PURE__*/Object.freeze({
 });
 
 var benchmarks = {
+    globalMemRead1D,
     globalMemRead,
     matVecMul,
 };
@@ -787,8 +1031,9 @@ const comparer = (idx, ascending) => (a, b) => ((v1, v2) => {
     return v1 !== '' && v2 !== '' && !isNaN(n1) && !isNaN(n2)
         ? n1 - n2 : v1.toString().localeCompare(v2);
 })(getCellValue(ascending ? a : b, idx), getCellValue(ascending ? b : a, idx));
+let doSort = () => { };
 function addSort(th) {
-    let asc = undefined;
+    let asc = true;
     th.classList.add('sortable');
     th.addEventListener('click', (() => {
         const table = th.closest('table');
@@ -796,9 +1041,12 @@ function addSort(th) {
             s.classList.remove('sort-up');
             s.classList.remove('sort-down');
         });
-        Array.from(table.querySelectorAll('tr:nth-child(n+2)'))
-            .sort(comparer(Array.from(th.parentNode.children).indexOf(th), asc = !asc))
-            .forEach(tr => table.appendChild(tr));
+        doSort = () => {
+            Array.from(table.querySelectorAll('tr:nth-child(n+2)'))
+                .sort(comparer(Array.from(th.parentNode.children).indexOf(th), !asc))
+                .forEach(tr => table.appendChild(tr));
+        };
+        doSort();
         if (asc === true) {
             th.classList.remove('sort-down');
             th.classList.add('sort-up');
@@ -807,6 +1055,7 @@ function addSort(th) {
             th.classList.remove('sort-up');
             th.classList.add('sort-down');
         }
+        asc = !asc;
     }));
 }
 const queryParams = new URLSearchParams(window.location.search);
@@ -827,20 +1076,30 @@ for (const [name, b] of Object.entries(benchmarks)) {
     const suiteHeading = document.createElement('h3');
     suiteHeading.innerText = name;
     suiteContainer.appendChild(suiteHeading);
+    const progress = document.createElement('progress');
+    progress.max = 100;
+    progress.value = 0;
+    suiteContainer.appendChild(progress);
     const suiteResults = document.createElement('table');
     suiteContainer.appendChild(suiteResults);
     const tableRowHead = document.createElement('tr');
     suiteResults.appendChild(tableRowHead);
-    for (const heading of ['case', 'min', 'max', 'avg', 'med', 'std_dev']) {
+    for (const heading of ['case', 'min', 'max', 'avg', 'med', 'std_dev', 'n']) {
         const th = document.createElement('th');
         th.innerText = heading;
         tableRowHead.appendChild(th);
         addSort(th);
+        if (heading === 'med') {
+            th.click();
+        }
     }
-    for (const [case_name, params] of Object.entries(b.cases)) {
-        console.log(name, case_name);
-        let results = [];
-        test_results.set(name, results);
+    progress.max = b.cases.length;
+    if (b.cases.length === 0) {
+        continue;
+    }
+    let i = 0;
+    async function runCase(params) {
+        console.log(`${++i} ${name} ${params.toString()}`);
         let device;
         try {
             const t = b.generateTest(params);
@@ -850,29 +1109,33 @@ for (const [name, b] of Object.entries(benchmarks)) {
             }
             const adapter = await navigator.gpu.requestAdapter(opts);
             if (!adapter) {
-                continue;
+                return;
             }
             device = await adapter.requestDevice({
                 requiredLimits: t.requiredLimits,
                 requiredFeatures: t.requiredFeatures,
             });
+            device.onuncapturederror = function (err) {
+                console.error(err);
+            };
             if (!device) {
-                continue;
+                return;
             }
             const run = t.test(device);
             // warmup
-            for (let i = 0; i < 3; ++i) {
-                run(10);
-            }
+            await run(10);
             // calibration
             let avgTime = 0;
-            for (let i = 0; i < 5; ++i) {
-                avgTime += (await run(10).getTime()) / 5;
+            for (let i = 0; i < 3; ++i) {
+                avgTime += (await run(10).getTime()) / 3;
             }
-            // compute number of runs to hit 0.1 seconds.
-            const n = Math.ceil((1e9 * 0.1) / avgTime);
-            // perform 10 trials.
-            const trial_results = new Array(10);
+            if (avgTime === 0) {
+                throw new Error('Invalid calibration');
+            }
+            // compute number of runs to hit 0.05 seconds.
+            const n = Math.max(Math.ceil((1e9 * 0.05) / avgTime), 5);
+            // perform 5 trials.
+            const trial_results = new Array(5);
             for (let i = 0; i < trial_results.length; ++i) {
                 trial_results[i] = 10e-3 * await run(n).getTime(); // convert to microseconds
             }
@@ -881,7 +1144,7 @@ for (const [name, b] of Object.entries(benchmarks)) {
             const avg = trial_results.reduce((a, b) => a + b) / trial_results.length;
             const med = trial_results.sort()[Math.floor(trial_results.length / 2)];
             const std_dev = Math.sqrt(trial_results.map(x => Math.pow(x - avg, 2)).reduce((a, b) => a + b) / trial_results.length);
-            const r = { case_name, min, max, avg, med, std_dev };
+            const r = { case_name: params.toString(), min, max, avg, med, std_dev, n };
             results.push(r);
             const tableRow = document.createElement('tr');
             for (let v of Object.values(r)) {
@@ -893,15 +1156,82 @@ for (const [name, b] of Object.entries(benchmarks)) {
                 tableRow.appendChild(tableCell);
             }
             suiteResults.appendChild(tableRow);
+            doSort();
+            return med;
         }
         catch (err) {
             console.warn(err);
-            continue;
+            return;
         }
         finally {
             if (device) {
                 device.destroy();
             }
+            progress.value = i;
         }
+    }
+    // Build the set of cases, and a map of the parameter space.
+    // We'll iterate the parameter space to try to search for other cases
+    // which look similar to the current best case.
+    const param_space = {};
+    const pending_case_map = new Map();
+    for (const c of b.cases) {
+        pending_case_map.set(c.toString(), c);
+        for (const [k, v] of Object.entries(c)) {
+            if (typeof v === 'function') {
+                continue;
+            }
+            if (!param_space[k]) {
+                param_space[k] = new Map();
+            }
+            param_space[k].set(JSON.stringify(v), v);
+        }
+    }
+    let results = [];
+    test_results.set(name, results);
+    const caseQuery = queryParams.get('case');
+    if (caseQuery != null) {
+        await runCase(pending_case_map.get(caseQuery));
+        continue;
+    }
+    console.log(`Running ${b.cases.length} cases of ${name}...`);
+    while (pending_case_map.size > 0) {
+        // Get a random case to use as a starting point.
+        let c = Array.from(pending_case_map.values())[Math.floor(Math.random() * pending_case_map.size)];
+        // .next().value;
+        let bestTime;
+        let didRunCase = false;
+        do {
+            didRunCase = false;
+            // Iterate the dimensions of the parameter space.
+            for (const dim of Object.keys(param_space)) {
+                // Iterate through the values of `dim`.
+                for (const v of param_space[dim].values()) {
+                    // Get the key for `c` using value `v` for `dim`.
+                    const k = {
+                        ...c,
+                        [dim]: v
+                    }.toString();
+                    const candidate = pending_case_map.get(k);
+                    if (!candidate) {
+                        // If this is not a real case, skip it.
+                        continue;
+                    }
+                    // Remove it from the pending cases since we will run it now.
+                    pending_case_map.delete(k);
+                    // Run the case.
+                    let candidateTime = await runCase(candidate);
+                    if (candidateTime === undefined) {
+                        continue;
+                    }
+                    didRunCase = true;
+                    // If this is the best case so far, save it.
+                    if (bestTime === undefined || candidateTime < bestTime) {
+                        bestTime = candidateTime;
+                        c = candidate;
+                    }
+                }
+            }
+        } while (didRunCase);
     }
 }
