@@ -376,7 +376,7 @@ struct Vector {
   }
 }
 
-function caseGenerator(): Params[] {
+export async function caseGenerator(adapterOpts?: GPURequestAdapterOptions): Promise<Params[]> {
   let out: Params[] = [];
   for (const storage_dtype of ['f32', 'f16', 'u8'] as const) {
     for (const swizzled of [false, true] as const) {
@@ -408,5 +408,3 @@ function caseGenerator(): Params[] {
   }
   return out;
 }
-
-export const cases = caseGenerator();

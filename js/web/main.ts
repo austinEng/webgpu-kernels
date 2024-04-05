@@ -53,6 +53,13 @@ for (const [name,] of Object.entries(benchmarks)) {
   document.body.appendChild(link);
 }
 
+const all = queryParams.get('all');
+
+const adapterOpts: GPURequestAdapterOptions = {};
+if (powerPreference) {
+  adapterOpts.powerPreference = powerPreference as GPUPowerPreference;
+}
+
 for (const [name, b] of Object.entries(benchmarks)) {
   if (name !== queryParams.get('benchmark')) {
     continue;
@@ -84,9 +91,11 @@ for (const [name, b] of Object.entries(benchmarks)) {
     }
   }
 
-  progress.max = b.cases.length;
+  const cases = await b.caseGenerator(all ? undefined : adapterOpts);
 
-  if (b.cases.length === 0) {
+  progress.max = cases.length;
+
+  if (cases.length === 0) {
     continue;
   }
 
@@ -100,25 +109,24 @@ for (const [name, b] of Object.entries(benchmarks)) {
     try {
       const t = b.generateTest(params as any);
 
-      const opts: GPURequestAdapterOptions = {};
-      if (powerPreference) {
-        opts.powerPreference = powerPreference as GPUPowerPreference;
-      }
-      const adapter = await navigator.gpu.requestAdapter(opts);
+      const adapter = await navigator.gpu.requestAdapter(adapterOpts);
       if (!adapter) {
         return;
       }
       device = await adapter.requestDevice({
-        requiredLimits: t.requiredLimits,
+        requiredLimits: {
+          ...t.requiredLimits,
+          maxComputeInvocationsPerWorkgroup: adapter.limits.maxComputeInvocationsPerWorkgroup,
+          maxComputeWorkgroupSizeX: adapter.limits.maxComputeWorkgroupSizeX,
+          maxComputeWorkgroupSizeY: adapter.limits.maxComputeWorkgroupSizeY,
+          maxComputeWorkgroupSizeZ: adapter.limits.maxComputeWorkgroupSizeZ,
+        },
         requiredFeatures: t.requiredFeatures,
       });
-      device.onuncapturederror = function(err) {
-        console.error(err);
-      }
       if (!device) {
         return;
       }
-
+      device.pushErrorScope('validation');
       const run = t.test(device);
 
       // warmup
@@ -132,7 +140,7 @@ for (const [name, b] of Object.entries(benchmarks)) {
         throw new Error('Invalid calibration');
       }
       // compute number of runs to hit 0.05 seconds.
-      const n = Math.max(Math.ceil((1e9 * 0.05) / avgTime), 5);
+      const n = Math.max(Math.ceil((1e9 * 0.01) / avgTime), 5);
       // perform 5 trials.
       const trial_results = new Array(5);
       for (let i = 0; i < trial_results.length; ++i) {
@@ -164,6 +172,10 @@ for (const [name, b] of Object.entries(benchmarks)) {
       return;
     } finally {
       if (device) {
+        const error = await device.popErrorScope();
+        if (error) {
+          console.error(error.message);
+        }
         device.destroy();
       }
       progress.value = i;
@@ -175,7 +187,7 @@ for (const [name, b] of Object.entries(benchmarks)) {
   // which look similar to the current best case.
   const param_space: Record<string, Map<string, any>> = {};
   const pending_case_map: Map<string, Params> = new Map();
-  for (const c of b.cases) {
+  for (const c of cases) {
     pending_case_map.set(c.toString(), c);
     for (const [k, v] of Object.entries(c)) {
       if (typeof v === 'function') {
@@ -197,7 +209,7 @@ for (const [name, b] of Object.entries(benchmarks)) {
     continue;
   }
 
-  console.log(`Running ${b.cases.length} cases of ${name}...`);
+  console.log(`Running ${cases.length} cases of ${name}...`);
 
   while (pending_case_map.size > 0) {
     // Get a random case to use as a starting point.

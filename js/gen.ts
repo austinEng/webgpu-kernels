@@ -9,8 +9,9 @@ for (const file of await fs.readdir(new URL('../data/', import.meta.url))) {
 const shaders = new Map<string, string>();
 
 for (const [name, b] of Object.entries(benchmarks)) {
+  const cases = await b.caseGenerator();
   let shortNameCount = 0;
-  for (const [case_name, params] of Object.entries(b.cases)) {
+  for (const [case_name, params] of Object.entries(cases)) {
     const { wgsl, requiredLimits, requiredFeatures } = b.generateTest(params);
     let shortName = shaders.get(wgsl);
     if (shortName === undefined) {
