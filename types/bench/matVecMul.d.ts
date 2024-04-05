@@ -1,3 +1,4 @@
+/// <reference types="dist" />
 import { Benchmark } from './test';
 export type Params = {
     storage_dtype: 'f32' | 'f16' | 'u8';
@@ -10,4 +11,4 @@ export type Params = {
     toString(): string;
 };
 export declare function generateTest(params: Params): Benchmark;
-export declare const cases: Params[];
+export declare function caseGenerator(adapterOpts?: GPURequestAdapterOptions): Promise<Params[]>;
